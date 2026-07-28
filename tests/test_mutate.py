@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -232,6 +233,41 @@ class TestEndToEnd(unittest.TestCase):
             raise AssertionError(f"no summary line in:\n{output}")
 
         self.assertLess(survived(strong), survived(weak))
+
+    def test_timeout_leaves_no_orphan_process(self) -> None:
+        """Regression: a hanging mutant must not survive the timeout.
+
+        `shell=True` runs the command under /bin/sh. Killing only the shell
+        orphans the test runner, and since timeouts happen precisely when a
+        mutant turned a loop condition around, that orphan spins at 100% CPU
+        forever. Six of them once took a 4-core machine to load 70.
+        """
+        marker = "mutate_orphan_regression_marker"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "impl.py").write_text("def f(a, b):\n    return a < b\n")
+            hang = f'{sys.executable} -c "import time; time.sleep(90)  # {marker}"'
+            result = subprocess.run(
+                [
+                    sys.executable, str(MUTATE_PATH),
+                    "--paths", "impl.py",
+                    "--test-command", hang,
+                    "--timeout", "2",
+                    "--max-mutants", "1",
+                    "--quiet",
+                ],
+                cwd=project, capture_output=True, text=True, timeout=120,
+            )
+            # Baseline itself hangs, so it exits non-zero -- that is fine here.
+            del result
+            time.sleep(1)
+            found = subprocess.run(
+                ["pgrep", "-f", marker], capture_output=True, text=True
+            )
+            leftover = [p for p in found.stdout.split() if p.strip()]
+            for pid in leftover:  # never leave the machine worse than we found it
+                subprocess.run(["kill", "-9", pid], capture_output=True)
+            self.assertEqual(leftover, [], f"orphaned process(es) survived: {leftover}")
 
     def test_baseline_failure_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

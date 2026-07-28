@@ -32,6 +32,7 @@ import ast
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -319,16 +320,43 @@ def invalidate_bytecode(path: Path) -> None:
             stale.unlink(missing_ok=True)
 
 
-def run_tests(command: str, timeout: float) -> str:
-    """Run the suite. Returns KILLED / SURVIVED / TIMEOUT."""
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill the whole process group and reap it."""
     try:
-        completed = subprocess.run(
-            command, shell=True, capture_output=True, timeout=timeout, env=TEST_ENV
-        )
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        process.kill()
+    try:
+        process.wait(timeout=10)
     except subprocess.TimeoutExpired:
+        pass
+
+
+def run_tests(command: str, timeout: float) -> str:
+    """Run the suite. Returns KILLED / SURVIVED / TIMEOUT.
+
+    The timeout path must kill the entire process tree, not just the shell.
+    `shell=True` means the command runs as a child of /bin/sh; killing only the
+    shell orphans the test runner, which keeps executing. Since a timeout here
+    usually means a mutant turned a loop condition around, that orphan spins at
+    100% CPU forever. A handful of them will bring a machine to its knees --
+    which is exactly what happened before `start_new_session` was added.
+    """
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=TEST_ENV,
+        start_new_session=True,  # own process group, so killpg reaches every child
+    )
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(process)
         return TIMEOUT
     # Tests passing on mutated source means the mutant went unnoticed.
-    return SURVIVED if completed.returncode == 0 else KILLED
+    return SURVIVED if process.returncode == 0 else KILLED
 
 
 def main(argv: Sequence[str] | None = None) -> int:
