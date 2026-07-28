@@ -54,14 +54,20 @@ agent the triage procedure, which is the part people quit on.
 
 ## Install
 
-Part of the **evidence** plugin by LKC:
+Either the whole **evidence** plugin, which is all four skills:
 
 ```
 /plugin marketplace add lkc-studio/claude-plugins
 /plugin install evidence@lkc-plugins
 ```
 
-Then start a new session and ask something like *"are the tests for this module actually any good?"*.
+Or this skill on its own:
+
+```bash
+git clone https://github.com/lkc-studio/claude-skill-mutants.git ~/.claude/skills/mutants
+```
+
+Then start a new session and ask something like *"are the tests for this module actually any good?"*
 
 ## Using the tool directly
 
